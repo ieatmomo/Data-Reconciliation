@@ -1,5 +1,7 @@
 from flask import Flask,request, jsonify
 from models import AnalysisResult
+from analysis import analyse_files, create_trend_graph
+
 app = Flask(__name__)
 
 @app.route('/')
@@ -19,6 +21,11 @@ def upload_files():
     AnalysisResult.save_to_db(result)
 
     return jsonify({"message": "Files received successfully!"}), 200
+
+@app.route('/result', methods=['GET'])
+def get_result():
+    result = (AnalysisResult.query_analysis()).to_dict()
+    return jsonify(result), 200
 
 if __name__ == '__main__':
     app.run(debug=True)
