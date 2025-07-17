@@ -1,18 +1,11 @@
-from flask_sqlalchemy import SQLAlchemy
-db = SQLAlchemy()
+from flask import current_app
 
-class AnalysisResult(db.Model):
-    #implement later
-    id = db.Column(db.Integer, primary_key=True)
+def save_to_db(result):
+    # result should be a dict
+    mongo = current_app.extensions['pymongo']
+    mongo.db.analysis_results.insert_one(result)
 
-    def save_to_db(self):
-        ### implement later
-        return 0
-    
-    def query_analysis(self):
-        ### implement later, use .all or .first to ensure object format
-        return 1
-    
-    def get_historic_data(self, system_name):
-        ### implement later
-        return 2
+def get_historic_data(system_name):
+    mongo = current_app.extensions['pymongo']
+    results = mongo.db.analysis_results.find({'system_name': system_name}).sort('date', 1)
+    return list(results)

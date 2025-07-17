@@ -1,8 +1,12 @@
-from flask import Flask,request, jsonify
-from models import AnalysisResult
+from flask import Flask, request, jsonify
+from flask_pymongo import PyMongo
 from analysis import analyse_files, create_trend_graph
+from config import MONGO_URI
+from models import save_to_db, get_historic_data
 
 app = Flask(__name__)
+app.config["MONGO_URI"] = MONGO_URI
+mongo = PyMongo(app)
 
 @app.route('/')
 def home():
@@ -17,21 +21,16 @@ def upload_files():
     fileOld = request.files['old']
     fileNew= request.files['new']
 
-    result = analyse_files(fileOld, fileNew)  # Custom function to process files
-    AnalysisResult.save_to_db(result)
+    result = analyse_files(fileOld, fileNew)  # Must return a dict
+    save_to_db(result)
 
-    return jsonify({"message": "Files received successfully!"}), 200
-
-@app.route('/result', methods=['GET'])
-def get_result():
-    result = (AnalysisResult.query_analysis()).to_dict()
     return jsonify(result), 200
 
 @app.route('/history', methods=['GET'])
 def get_historic_data():
     system = request.args.get('system')
     # Query all records for the given system name
-    results = AnalysisResult.get_historic_data(system)
+    results = get_historic_data(system)
     trend_graph = create_trend_graph(results) #returns base64 encoded string
     return jsonify({"trend_graph": trend_graph}), 200
 

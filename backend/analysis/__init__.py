@@ -1,0 +1,1 @@
+from .analysis import analyse_files, create_trend_graph
