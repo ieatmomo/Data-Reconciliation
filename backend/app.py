@@ -27,5 +27,13 @@ def get_result():
     result = (AnalysisResult.query_analysis()).to_dict()
     return jsonify(result), 200
 
+@app.route('/history', methods=['GET'])
+def get_historic_data():
+    system = request.args.get('system')
+    # Query all records for the given system name
+    results = AnalysisResult.get_historic_data(system)
+    trend_graph = create_trend_graph(results) #returns base64 encoded string
+    return jsonify({"trend_graph": trend_graph}), 200
+
 if __name__ == '__main__':
     app.run(debug=True)
