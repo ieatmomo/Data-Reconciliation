@@ -1,0 +1,44 @@
+pair_name: sample
+pk: [id]
+fields:
+  name:
+    type: string
+    clean:
+      - strip_whitespace
+      - lowercase
+    fuzzy_match: 90
+  price:
+    type: decimal
+    tolerance: 0.01
+  date:
+    type: date
+    formats:
+      - '%Y-%m-%d'
+      - '%d %b %Y'
+      - '%Y/%m/%d'
+  quantity:
+    type: integer
+  category:
+    type: string
+    clean:
+      - strip_whitespace
+      - lowercase
+  description:
+    type: string
+    clean:
+      - strip_whitespace
+      - lowercase
+    fuzzy_match: 80
+  vendor:
+    type: ignore
+  location:
+    type: string
+    clean:
+      - strip_whitespace
+      - lowercase
+    fuzzy_match: 80
+  status:
+    type: string
+    clean:
+      - strip_whitespace
+      - lowercase
