@@ -84,6 +84,98 @@ def run_comparison():
     else:
         st.error(response.text)
 
+def load_available_systems():
+    """Load available systems from the database."""
+    try:
+        response = requests.get("http://localhost:5000/systems")
+        if response.ok:
+            return response.json().get("systems", [])
+        else:
+            st.error("Failed to load available systems")
+            return []
+    except Exception as e:
+        st.error(f"Error loading systems: {e}")
+        return []
+
+def display_historical_charts(selected_system, selected_pk=None):
+    """Display historical charts for the selected system."""
+    if not selected_system:
+        return
+    
+    # Get historical data
+    params = {"system": selected_system}
+    if selected_pk:
+        params["primary_key_used"] = selected_pk
+    
+    response = requests.get("http://localhost:5000/history", params=params)
+    
+    if response.ok:
+        graph_data = response.json()
+        if graph_data.get('dates'):
+            # Create two separate charts
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Exception Count Bar Chart
+                fig_exceptions = go.Figure()
+                fig_exceptions.add_trace(go.Bar(
+                    x=graph_data['dates'],
+                    y=graph_data['exception_counts'],
+                    name='Exception Count',
+                    marker_color='lightcoral'
+                ))
+                
+                fig_exceptions.update_layout(
+                    title=f'Exception Count Trend - {selected_system.title()}',
+                    xaxis=dict(title='Date', type='category'),
+                    yaxis=dict(
+                        title='Number of Exceptions',
+                        range=[0, max(graph_data['exception_counts']) * 1.1] if graph_data['exception_counts'] else [0, 1]
+                    ),
+                    height=400
+                )
+                st.plotly_chart(fig_exceptions, use_container_width=True)
+            
+            with col2:
+                # Match Rate Line Chart
+                fig_match_rate = go.Figure()
+                fig_match_rate.add_trace(go.Scatter(
+                    x=graph_data['dates'],
+                    y=graph_data['match_rates'],
+                    mode='lines+markers',
+                    name='Match Rate %',
+                    line=dict(color='blue', width=3),
+                    marker=dict(size=8)
+                ))
+                
+                fig_match_rate.update_layout(
+                    title=f'Match Rate Trend - {selected_system.title()}',
+                    xaxis=dict(title='Date', type='category'),
+                    yaxis=dict(title='Match Rate (%)', range=[0, 100]),
+                    height=400
+                )
+                st.plotly_chart(fig_match_rate, use_container_width=True)
+                
+            # Show summary stats
+            avg_match_rate = sum(graph_data['match_rates'])/len(graph_data['match_rates']) if graph_data['match_rates'] else 0
+            total_exceptions = sum(graph_data['exception_counts']) if graph_data['exception_counts'] else 0
+            
+            st.markdown(f"""
+            **📊 Summary for {selected_system.title()}:**
+            - **Total Runs**: {len(graph_data['dates'])}
+            - **Average Match Rate**: {avg_match_rate:.1f}%
+            - **Total Exceptions**: {total_exceptions}
+            - **Date Range**: {graph_data['dates'][0]} to {graph_data['dates'][-1]}
+            """)
+        else:
+            st.info(f"No historical data available for system: {selected_system}")
+    else:
+        st.error(f"Failed to load historical data: {response.status_code}")
+
+# =============================================================================
+# FILE UPLOAD AND COMPARISON SECTION
+# =============================================================================
+
 if old_upload and new_upload:
     # Validate that files belong to the same system
     system_info = get_system_info(old_upload.name, new_upload.name)
@@ -171,65 +263,142 @@ if old_upload and new_upload:
         if result.get("exceptions"):
             st.subheader("Exceptions")
             exceptions_df = pd.DataFrame(result['exceptions'])
-            desired_order = ['id', 'field', 'old', 'new']
-            columns_to_show = [col for col in desired_order if col in exceptions_df.columns]
+            
+            # Get primary key columns and create dynamic column order
+            pk_columns = result.get("primary_key", [])
+            
+            # Start with primary key columns, then add field, old, new
+            column_order = pk_columns.copy()
+            for col in ['field', 'old', 'new']:
+                if col in exceptions_df.columns and col not in column_order:
+                    column_order.append(col)
+            
+            # Add any remaining columns
+            for col in exceptions_df.columns:
+                if col not in column_order:
+                    column_order.append(col)
+            
+            # Filter to only include columns that actually exist
+            columns_to_show = [col for col in column_order if col in exceptions_df.columns]
+            
             st.dataframe(exceptions_df[columns_to_show], height=400, use_container_width=True)
+            st.caption(f"Primary Key(s): {', '.join(pk_columns)}")
 
-        # Historical data
-        response = requests.get("http://localhost:5000/history", params={
-            "system": result.get("system_name"),
-            "primary_key_used": ','.join(result.get("primary_key", []))
-        })
-        st.subheader(f"Historical Data for {result.get('system_name', 'Unknown')}")
-        if response.ok:
-            graph_data = response.json()
-            if graph_data.get('dates'):
-                system_name = graph_data.get('system_name', result.get("system_name", "Unknown"))
+# =============================================================================
+# HISTORICAL DATA BROWSER SECTION
+# =============================================================================
 
-                # Create two separate charts
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Exception Count Bar Chart
-                    fig_exceptions = go.Figure()
-                    fig_exceptions.add_trace(go.Bar(
-                        x=graph_data['dates'],
-                        y=graph_data['exception_counts'],
-                        name='Exception Count',
-                        marker_color='lightcoral'
-                    ))
+st.header("📈 Historical Data Browser")
+st.markdown("Browse historical reconciliation data for any system in the database.")
+
+# Load available systems
+available_systems = load_available_systems()
+
+if available_systems:
+    # System selection
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        selected_system = st.selectbox(
+            "Select System:",
+            options=[""] + available_systems,
+            index=0,
+            help="Choose a system to view its historical reconciliation data"
+        )
+    
+    with col2:
+        if selected_system:
+            # Get system details to show available primary keys
+            try:
+                response = requests.get(f"http://localhost:5000/system_details/{selected_system}")
+                if response.ok:
+                    system_details = response.json()
+                    available_pks = system_details.get("primary_keys", [])
                     
-                    fig_exceptions.update_layout(
-                        title=f'Exception Count Trend - {system_name.title()}',
-                        xaxis=dict(title='Date', type='category'),
-                        yaxis=dict(
-                            title='Number of Exceptions',
-                            range=[0, max(graph_data['exception_counts']) * 1.1] if graph_data['exception_counts'] else [0, 1]
-                        ),
-                        height=400
-                    )
-                    st.plotly_chart(fig_exceptions, use_container_width=True)
+                    if len(available_pks) > 1:
+                        selected_pk = st.selectbox(
+                            "Primary Key Filter:",
+                            options=["All"] + available_pks,
+                            help="Filter by specific primary key combination"
+                        )
+                        selected_pk = None if selected_pk == "All" else selected_pk
+                    else:
+                        selected_pk = None
+                        if available_pks:
+                            st.info(f"Primary Key: {available_pks[0]}")
+                else:
+                    selected_pk = None
+                    st.error("Failed to load system details")
+            except Exception as e:
+                selected_pk = None
+                st.error(f"Error: {e}")
+
+    # Display historical data for selected system
+    if selected_system:
+        # Display charts
+        display_historical_charts(selected_system, selected_pk)
+        
+        # Show historical exception records in a table
+        st.subheader(f"📋 Exception Records for {selected_system.title()}")
+        
+        try:
+            # Get historical data to extract exception records
+            params = {"system": selected_system}
+            if selected_pk:
+                params["primary_key_used"] = selected_pk
+            
+            response = requests.get("http://localhost:5000/history", params=params)
+            
+            if response.ok:
+                graph_data = response.json()
                 
-                with col2:
-                    # Match Rate Line Chart
-                    fig_match_rate = go.Figure()
-                    fig_match_rate.add_trace(go.Scatter(
-                        x=graph_data['dates'],
-                        y=graph_data['match_rates'],
-                        mode='lines+markers',
-                        name='Match Rate %',
-                        line=dict(color='blue', width=3),
-                        marker=dict(size=8)
-                    ))
+                if graph_data.get('dates'):
+                    # Create a summary table of all runs
+                    summary_data = []
+                    for i, date in enumerate(graph_data['dates']):
+                        summary_data.append({
+                            'Date': date,
+                            'Match Rate (%)': graph_data['match_rates'][i],
+                            'Exception Count': graph_data['exception_counts'][i],
+                            'Status': '✅ Good' if graph_data['match_rates'][i] >= 95 else '⚠️ Check Required' if graph_data['match_rates'][i] >= 90 else '❌ Issues'
+                        })
                     
-                    fig_match_rate.update_layout(
-                        title=f'Match Rate Trend - {system_name.title()}',
-                        xaxis=dict(title='Date', type='category'),
-                        yaxis=dict(title='Match Rate (%)', range=[0, 100]),
-                        height=400
+                    summary_df = pd.DataFrame(summary_data)
+                    
+                    # Display the summary table
+                    st.dataframe(
+                        summary_df,
+                        height=300,
+                        use_container_width=True,
+                        column_config={
+                            "Date": st.column_config.DateColumn("Date"),
+                            "Match Rate (%)": st.column_config.NumberColumn("Match Rate (%)", format="%.1f"),
+                            "Exception Count": st.column_config.NumberColumn("Exception Count"),
+                            "Status": st.column_config.TextColumn("Status")
+                        }
                     )
-                    st.plotly_chart(fig_match_rate, use_container_width=True)
+                    
+                    # Download option
+                    csv_data = summary_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download Historical Data as CSV",
+                        data=csv_data,
+                        file_name=f"historical_data_{selected_system}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.info(f"No historical data found for system: {selected_system}")
             else:
-                st.info("No historical data available yet.")
-        else:
-            st.error(f"Failed to load historical data: {response.status_code}")
+                st.error("Failed to load historical data")
+                
+        except Exception as e:
+            st.error(f"Error loading historical data: {e}")
+    
+else:
+    st.info("🔍 No systems found in the database. Upload some files to start building historical data!")
+    st.markdown("""
+    **To get started:**
+    1. Upload your first set of files above
+    2. Run a comparison
+    3. Come back here to view historical trends
+    """)

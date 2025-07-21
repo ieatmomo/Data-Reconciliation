@@ -4,6 +4,7 @@ from analysis import etl, mapping, compare, graph
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS
 from models import save_to_db, get_historic_data
 from helpers import file_checker, convert_json_safe, parse_uploaded_file
+from models import MatchingData
 import tempfile
 import pandas as pd
 from db import db
@@ -126,6 +127,49 @@ def db_check():
         return jsonify({"status": "success", "row_count": count}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/systems', methods=['GET'])
+def get_available_systems():
+    '''
+    Get all unique system names from the database.
+    '''
+    try:
+        
+        # Get all unique system names
+        systems = db.session.query(MatchingData.system_name).distinct().all()
+        system_names = [system[0] for system in systems if system[0]]
+        
+        return jsonify({
+            "systems": sorted(system_names),
+            "count": len(system_names)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to retrieve systems: {str(e)}"}), 500
+
+@app.route('/system_details/<system_name>', methods=['GET'])
+def get_system_details(system_name):
+    '''
+    Get available primary keys for a specific system.
+    '''
+    try:
+        
+        # Get unique primary keys used for this system
+        records = MatchingData.query.filter_by(system_name=system_name).all()
+        
+        if not records:
+            return jsonify({"error": f"No data found for system: {system_name}"}), 404
+        
+        primary_keys = list(set([r.primary_key_used for r in records if r.primary_key_used]))
+        
+        return jsonify({
+            "system_name": system_name,
+            "primary_keys": primary_keys,
+            "record_count": len(records)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to retrieve system details: {str(e)}"}), 500
 
 @app.route('/history', methods=['GET'])
 def get_historic_data_route():
