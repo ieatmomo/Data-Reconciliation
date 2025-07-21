@@ -3,7 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from analysis import etl, mapping, compare, graph
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS
 from models import save_to_db, get_historic_data
-from helpers import file_checker, convert_json_safe
+from helpers import file_checker, convert_json_safe, parse_uploaded_file
 import tempfile
 import pandas as pd
 from db import db
@@ -31,54 +31,98 @@ def upload_files():
 
     try:
         if not file_checker(request.files['old']) or not file_checker(request.files['new']):
-            return jsonify({"error": "Invalid file type. Only CSV and XLSX files are allowed."}), 401
+            return jsonify({"error": "Invalid file type. Only CSV, XLSX, XLS, and XML files are allowed."}), 401
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
 
     fileOld = request.files['old']
     fileNew = request.files['new']
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=fileOld.filename) as tmp_old, \
-         tempfile.NamedTemporaryFile(delete=False, suffix=fileNew.filename) as tmp_new:
-        fileOld.save(tmp_old.name)
-        fileNew.save(tmp_new.name)
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{fileOld.filename}") as tmp_old, \
+             tempfile.NamedTemporaryFile(delete=False, suffix=f"_{fileNew.filename}") as tmp_new:
+            
+            # Save uploaded files to temporary locations
+            fileOld.save(tmp_old.name)
+            fileNew.save(tmp_new.name)
 
-        mapping_cfg = mapping.load_mapping('analysis/mapping.yaml')
-        df_old = etl.load_file(tmp_old.name)
-        df_new = etl.load_file(tmp_new.name)
-        df_old = etl.normalize(df_old, mapping_cfg)
-        df_new = etl.normalize(df_new, mapping_cfg)
+            # Load mapping config
+            mapping_cfg = mapping.load_mapping('analysis/mapping.yaml')
+            
+            # Use helper functions for file parsing
+            df_old = parse_uploaded_file(tmp_old.name, fileOld.filename)
+            df_new = parse_uploaded_file(tmp_new.name, fileNew.filename)
+            
+            # Normalize data using existing ETL
+            df_old = etl.normalize(df_old, mapping_cfg)
+            df_new = etl.normalize(df_new, mapping_cfg)
 
-        # Get primary key from frontend, fallback to auto-detect
-        pk_str = request.form.get('primary_key')
-        if pk_str:
-            pk_cols = [col.strip() for col in pk_str.split(',') if col.strip()]
-        else:
-            pk_cols = mapping.detect_primary_key(df_old, df_new)
+            # Get primary key from frontend, fallback to auto-detect
+            pk_str = request.form.get('primary_key')
+            if pk_str:
+                pk_cols = [col.strip() for col in pk_str.split(',') if col.strip()]
+            else:
+                pk_cols = mapping.detect_primary_key(df_old, df_new)
 
-        result = compare.run_compare(df_old, df_new, pk_cols, mapping_cfg)
+            # Run comparison
+            result = compare.run_compare(df_old, df_new, pk_cols, mapping_cfg)
 
-        result_for_db = {
-            "system_name": mapping_cfg.get("pair_name", "unknown"),
-            "date": pd.Timestamp.now(),
-            "match_pct": result["match_pct"],
-            "exceptions": result["exceptions"],
-            "primary_key": pk_cols
-        }
+            # Generate system name from filename (remove extension and normalize)
+            system_name = fileOld.filename.rsplit('.', 1)[0].lower().strip()
+            
+            # Override with mapping config if it exists and is not default
+            if mapping_cfg.get("pair_name") and mapping_cfg.get("pair_name") != "unknown":
+                system_name = mapping_cfg.get("pair_name")
 
+            # Get available columns for frontend
+            common_cols = list(set(df_old.columns) & set(df_new.columns))
+
+            # Prepare result for database
+            result_for_db = {
+                "system_name": system_name,
+                "date": pd.Timestamp.now(),
+                "match_pct": result["match_pct"],
+                "exceptions": result["exceptions"],
+                "primary_key": pk_cols
+            }
+
+            # Save to database
+            try:
+                save_to_db(result_for_db)
+            except Exception as e:
+                return jsonify({"error": f"Database save failed: {str(e)}"}), 500
+
+            # Prepare response for frontend
+            response_data = {
+                "match_pct": result["match_pct"],
+                "exceptions": result["exceptions"],
+                "primary_key": pk_cols,
+                "system_name": system_name,
+                "date": result_for_db["date"].isoformat(),
+                "available_columns": common_cols  # Send available columns to frontend
+            }
+
+            return jsonify(convert_json_safe(response_data)), 200
+
+    except Exception as e:
+        return jsonify({"error": f"Upload failed: {str(e)}"}), 500
+    finally:
+        # Clean up temporary files
         try:
-            save_to_db(result_for_db)
-        except Exception as e:
-            return jsonify({"error": f"Database save failed: {str(e)}"}), 500
+            import os
+            if 'tmp_old' in locals():
+                os.unlink(tmp_old.name)
+            if 'tmp_new' in locals():
+                os.unlink(tmp_new.name)
+        except:
+            pass  # Ignore cleanup errors
 
-        return jsonify(convert_json_safe(result_for_db)), 200
-    
 @app.route('/db_check')
 def db_check():
     try:
         # Try a simple query
-        from models import AnalysisResult
-        count = AnalysisResult.query.count()
+        from models import MatchingData
+        count = MatchingData.query.count()
         return jsonify({"status": "success", "row_count": count}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -97,22 +141,33 @@ def get_historic_data_route():
     try:
         results = get_historic_data(system, primary_key_used)
         
-        # Extract data for frontend - format dates without time
+        if not results:
+            return jsonify({
+                "dates": [],
+                "exception_counts": [],
+                "match_rates": [],
+                "system_name": system
+            }), 200
+        
+        # Extract data for frontend: format dates without time
         dates = []
         for r in results:
             if hasattr(r['date'], 'strftime'):
-                dates.append(r['date'].strftime('%Y-%m-%d'))  # Only date, no time
+                dates.append(r['date'].strftime('%Y-%m-%d')) 
             else:
-                dates.append(str(r['date']).split(' ')[0])  # Take only date part
+                dates.append(str(r['date']).split(' ')[0]) 
         
         exception_counts = [r['num_exceptions'] for r in results]
         match_rates = [r['match_rate'] for r in results]
+        
+        # Get the actual system name from the first result (all should be the same)
+        actual_system_name = results[0]['system_name'] if results else system
         
         return jsonify({
             "dates": dates,
             "exception_counts": exception_counts,
             "match_rates": match_rates,
-            "system_name": system  # Include system name in response
+            "system_name": actual_system_name  # Use the ACTUAL system name from DB
         }), 200
         
     except Exception as e:

@@ -1,15 +1,28 @@
 import pandas as pd
 from sqlalchemy import create_engine
 from typing import Dict, Any
+import xml.etree.ElementTree as ET
+from collections import Counter
 
 def load_file(path: str) -> pd.DataFrame:
     """
-    Read a CSV or Excel file into a pandas DataFrame.
+    Read a CSV, Excel, or XML file into a pandas DataFrame.
     """
     if path.endswith('.csv'):
         return pd.read_csv(path)
     elif path.endswith(('.xls', '.xlsx')):
         return pd.read_excel(path)
+    elif path.endswith('.xml'):
+        try:
+            return pd.read_xml(path)
+        except Exception:
+            # Fallback for complex XML
+            tree = ET.parse(path)
+            root = tree.getroot()
+            tags = [child.tag for child in root]
+            most_common_tag = Counter(tags).most_common(1)[0][0]
+            rows = [{c.tag: c.text for c in rec} for rec in root.findall(most_common_tag)]
+            return pd.DataFrame(rows)
     else:
         raise ValueError(f"Unsupported file type: {path}")
 

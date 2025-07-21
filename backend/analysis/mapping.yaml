@@ -1,4 +1,4 @@
-pair_name: sample
+# pair_name: sample
 pk: [id]
 fields:
   name:
