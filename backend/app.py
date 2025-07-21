@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from analysis import etl, mapping, compare
+from analysis import etl, mapping, compare, graph
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS
 from models import save_to_db, get_historic_data
 from helpers import file_checker, convert_json_safe
@@ -83,36 +83,40 @@ def db_check():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# @app.route('/history', methods=['GET'])
-# def get_historic_data_route():
-#     '''
-#     Endpoint to retrieve historic data for a given system name, and create a trend graph
-#     based on that data, returning it as a base64 encoded string.
-#     '''
-    
-#     #Getting system name from frontend
-#     system = request.args.get('system')
+@app.route('/history', methods=['GET'])
+def get_historic_data_route():
+    '''
+    Endpoint to retrieve historic data for a given system name and primary key
+    '''
+    system = request.args.get('system')
+    primary_key_used = request.args.get('primary_key_used')
 
-#     if system is None:
-        
-#         return jsonify({"error": "System name is required"}), 400
+    if system is None:
+        return jsonify({"error": "System name is required"}), 400
     
-#     try:
+    try:
+        results = get_historic_data(system, primary_key_used)
         
-#         results = get_historic_data(system)
-    
-#     except Exception as e:
+        # Extract data for frontend - format dates without time
+        dates = []
+        for r in results:
+            if hasattr(r['date'], 'strftime'):
+                dates.append(r['date'].strftime('%Y-%m-%d'))  # Only date, no time
+            else:
+                dates.append(str(r['date']).split(' ')[0])  # Take only date part
         
-#         return jsonify({"error": f"Failed to retrieve historic data: {str(e)}"}), 500
-#     try:
+        exception_counts = [r['num_exceptions'] for r in results]
+        match_rates = [r['match_rate'] for r in results]
         
-#         trend_graph = create_trend_graph(results) #returns base64 encoded string
-    
-#     except Exception as e:
+        return jsonify({
+            "dates": dates,
+            "exception_counts": exception_counts,
+            "match_rates": match_rates,
+            "system_name": system  # Include system name in response
+        }), 200
         
-#         return jsonify({"error": f"Failed to create trend graph: {str(e)}"}), 500
-    
-#     return jsonify({"trend_graph": trend_graph}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to retrieve historic data: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)

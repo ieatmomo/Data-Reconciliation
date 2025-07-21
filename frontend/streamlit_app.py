@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+import plotly.graph_objects as go
+import json
 import pandas as pd
 
 st.title("Reconciliation Tool")
@@ -75,3 +77,68 @@ if old_upload and new_upload:
         desired_order = ['id', 'field', 'old', 'new']
         columns_to_show = [col for col in desired_order if col in exceptions_df.columns]
         st.dataframe(exceptions_df[columns_to_show], height=400, use_container_width=True)
+
+        response = requests.get("http://localhost:5000/history", params={
+            "system": result.get("system_name"),
+            "primary_key_used": ','.join(result.get("primary_key", []))
+            
+        })
+        st.subheader(f"Historical Data for {result.get('system_name', 'Unknown')}")
+        if response.ok:
+            graph_data = response.json()
+            system_name = graph_data.get('system_name', result.get("system_name", "Unknown"))
+
+            # Create two separate charts
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Exception Count Bar Chart
+                fig_exceptions = go.Figure()
+                fig_exceptions.add_trace(go.Bar(
+                    x=graph_data['dates'],
+                    y=graph_data['exception_counts'],
+                    name='Exception Count',
+                    marker_color='lightcoral'
+                ))
+                
+                fig_exceptions.update_layout(
+                    title=f'Exception Count Trend - {system_name.title()}',
+                    xaxis=dict(
+                        title='Date',
+                        type='category'
+                    ),
+                    yaxis=dict(
+                        title='Number of Exceptions',
+                        range=[0, max(graph_data['exception_counts']) * 1.1]
+                    ),
+                    height=400
+                )
+                st.plotly_chart(fig_exceptions, use_container_width=True)
+            
+            with col2:
+                # Match Rate Line Chart
+                fig_match_rate = go.Figure()
+                fig_match_rate.add_trace(go.Scatter(
+                    x=graph_data['dates'],
+                    y=graph_data['match_rates'],
+                    mode='lines+markers',
+                    name='Match Rate %',
+                    line=dict(color='blue', width=3),
+                    marker=dict(size=8)
+                ))
+                
+                fig_match_rate.update_layout(
+                    title=f'Match Rate Trend - {system_name.title()}',
+                    xaxis=dict(
+                        title='Date',
+                        type='category'
+                    ),
+                    yaxis=dict(
+                        title='Match Rate (%)',
+                        range=[0, 100]
+                    ),
+                    height=400
+                )
+                st.plotly_chart(fig_match_rate, use_container_width=True)
+        else:
+            st.error(f"Failed to load historical data: {response.status_code}")

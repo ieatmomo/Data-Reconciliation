@@ -1,0 +1,6 @@
+ID,Name,Price,Date,Quantity,Category,Description,Vendor,Location,Status
+1,ACME  Corp ,100.0,09 Jul 2025,10,Equity,Tech giant,NewSys,New York,Active
+2,Beta LLC,250.49,2025-07-09,5,Bond,Govt bond,NewSys,Los Angeles,Active
+3,Gamma Incorp,75.3,2025/07/09,8,Equity,Industrial,NewSys,San Francisco,Inactive
+4,Delta Company,310.0,2025-07-09,3,ETF,Index fund,NewSys,Chicago,Active
+5,Epsilon Ltd,150.75,2025-07-09,6,Equity,Healthcare,NewSys,Boston,Inactive

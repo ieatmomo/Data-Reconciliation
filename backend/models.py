@@ -8,7 +8,18 @@ class MatchingData(db.Model):
     match_rate = db.Column(db.Float)
     system_name = db.Column(db.String(128))
     num_exceptions = db.Column(db.Integer)
+    primary_key_used = db.Column(db.String(256)) 
     exceptions = db.relationship('ExceptionRecord', backref='matching_data', lazy=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'date': self.date,
+            'match_rate': self.match_rate,
+            'system_name': self.system_name,
+            'num_exceptions': self.num_exceptions,
+            'primary_key_used': self.primary_key_used
+        }
 
 class ExceptionRecord (db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -18,7 +29,6 @@ class ExceptionRecord (db.Model):
     new_value = db.Column(db.String(256))
 
 def save_to_db(result):
-    # Convert pandas.Timestamp to Python datetime
     date = result.get("date")
     if isinstance(date, pd.Timestamp):
         date = date.to_pydatetime()
@@ -27,19 +37,19 @@ def save_to_db(result):
     system_name = result.get("system_name")
     exceptions_list = result.get("exceptions", [])
     num_exceptions = len(exceptions_list)
+    primary_key_used = ','.join(result.get("primary_key", [])) 
 
     matching_data = MatchingData(
         date=date,
         match_rate=match_rate,
         system_name=system_name,
-        num_exceptions=num_exceptions
+        num_exceptions=num_exceptions,
+        primary_key_used=primary_key_used
     )
     db.session.add(matching_data)
-    db.session.flush()  # Get matching_data.id before commit
+    db.session.flush()
 
-    # Save exceptions
     for exc in exceptions_list:
-        # Convert numpy types to str/int
         name = str(exc.get("field", ""))
         old_value = str(exc.get("old", ""))
         new_value = str(exc.get("new", ""))
@@ -53,6 +63,13 @@ def save_to_db(result):
 
     db.session.commit()
 
-def get_historic_data(system_name):
-    results = MatchingData.query.filter_by(system_name=system_name).order_by(MatchingData.date.asc()).all()
+def get_historic_data(system_name, primary_key_used=None):
+    query = MatchingData.query.filter_by(system_name=system_name)
+    
+    if primary_key_used:
+        query = query.filter_by(primary_key_used=primary_key_used)
+    
+    results = query.order_by(MatchingData.date.asc()).all()
     return [r.to_dict() for r in results]
+
+

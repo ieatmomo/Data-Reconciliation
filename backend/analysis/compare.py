@@ -1,3 +1,4 @@
+import pandas as pd
 from rapidfuzz import fuzz
 
 def run_compare(df_old, df_new, pk_cols, cfg=None):
@@ -34,7 +35,18 @@ def run_compare(df_old, df_new, pk_cols, cfg=None):
         if rules.get('type') == 'string' and 'fuzzy_match' in rules:
             thresh = rules['fuzzy_match']
             for idx, o, n in zip(merged.index, merged[old_col], merged[new_col]):
-                if fuzz.ratio(str(o), str(n)) < thresh:
+                # Handle null values properly
+                if pd.isna(o) and pd.isna(n):
+                    continue  # Both null = match
+                elif pd.isna(o) or pd.isna(n):
+                    # One null, one not = mismatch
+                    exceptions.append({
+                        **{k: merged.loc[idx, k] for k in pk_cols},
+                        "field": col,
+                        "old": o,
+                        "new": n,
+                    })
+                elif fuzz.ratio(str(o), str(n)) < thresh:
                     exceptions.append({
                         **{k: merged.loc[idx, k] for k in pk_cols},
                         "field": col,
@@ -46,21 +58,34 @@ def run_compare(df_old, df_new, pk_cols, cfg=None):
         elif rules.get('type') == 'decimal' and 'tolerance' in rules:
             tol = rules['tolerance']
             for idx, o, n in zip(merged.index, merged[old_col], merged[new_col]):
-                try:
-                    if abs(float(o) - float(n)) > tol:
-                        exceptions.append({
-                            **{k: merged.loc[idx, k] for k in pk_cols},
-                            "field": col,
-                            "old": o,
-                            "new": n,
-                        })
-                except Exception:
+                # Handle null values properly
+                if pd.isna(o) and pd.isna(n):
+                    continue  # Both null = match
+                elif pd.isna(o) or pd.isna(n):
+                    # One null, one not = mismatch
                     exceptions.append({
                         **{k: merged.loc[idx, k] for k in pk_cols},
                         "field": col,
                         "old": o,
                         "new": n,
                     })
+                else:
+                    try:
+                        if abs(float(o) - float(n)) > tol:
+                            exceptions.append({
+                                **{k: merged.loc[idx, k] for k in pk_cols},
+                                "field": col,
+                                "old": o,
+                                "new": n,
+                            })
+                    except (ValueError, TypeError):
+                        # Can't convert to float = mismatch
+                        exceptions.append({
+                            **{k: merged.loc[idx, k] for k in pk_cols},
+                            "field": col,
+                            "old": o,
+                            "new": n,
+                        })
 
         # Default exact compare
         else:
