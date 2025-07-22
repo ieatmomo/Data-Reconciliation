@@ -190,6 +190,7 @@ def get_historic_data_route():
                 "dates": [],
                 "exception_counts": [],
                 "match_rates": [],
+                "primary_keys_used": [],
                 "system_name": system
             }), 200
         
@@ -203,6 +204,7 @@ def get_historic_data_route():
         
         exception_counts = [r['num_exceptions'] for r in results]
         match_rates = [r['match_rate'] for r in results]
+        primary_keys_used = [r.get('primary_key_used', 'Unknown') for r in results]
         
         # Get the actual system name from the first result (all should be the same)
         actual_system_name = results[0]['system_name'] if results else system
@@ -211,6 +213,7 @@ def get_historic_data_route():
             "dates": dates,
             "exception_counts": exception_counts,
             "match_rates": match_rates,
+            "primary_keys_used": primary_keys_used,  # Add this line
             "system_name": actual_system_name  # Use the ACTUAL system name from DB
         }), 200
         
