@@ -1,6 +1,7 @@
 import streamlit as st
 from components.file_upload import render_file_upload_section
 from components.historical_browser import render_historical_browser
+from components.previous_analysis import render_previous_analysis
 
 st.title("Reconciliation Tool")
 
@@ -17,6 +18,14 @@ if st.sidebar.button("🔄 Refresh Dashboard", help="Clear all results and refre
             del st.session_state[key]
     st.rerun()
 
-# Render main sections
-render_file_upload_section(map_path)
-render_historical_browser()
+# Create tabs for different sections
+tab1, tab2, tab3 = st.tabs(["📁 File Upload", "📈 Historical Trends", "🔍 Previous Analysis"])
+
+with tab1:
+    render_file_upload_section(map_path)
+
+with tab2:
+    render_historical_browser()
+
+with tab3:
+    render_previous_analysis()

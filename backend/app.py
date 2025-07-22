@@ -218,5 +218,78 @@ def get_historic_data_route():
     except Exception as e:
         return jsonify({"error": f"Failed to retrieve historic data: {str(e)}"}), 500
 
+@app.route('/analysis', methods=['GET'])
+def get_specific_analysis():
+    '''
+    Endpoint to retrieve specific analysis data including detailed exceptions.
+    '''
+    system = request.args.get('system')
+    primary_key_used = request.args.get('primary_key_used')
+    date = request.args.get('date')
+
+    if not system:
+        return jsonify({"error": "System name is required"}), 400
+    
+    if not date:
+        return jsonify({"error": "Date is required"}), 400
+    
+    try:
+        from models import MatchingData, ExceptionRecord
+        from datetime import datetime
+        
+        # Parse the date string to datetime
+        try:
+            target_date = datetime.strptime(date, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
+        
+        # Build query
+        query = MatchingData.query.filter_by(system_name=system)
+        if primary_key_used:
+            query = query.filter_by(primary_key_used=primary_key_used)
+        
+        # Filter by date (comparing only the date part)
+        query = query.filter(db.func.date(MatchingData.date) == target_date)
+        
+        # Get the specific record
+        record = query.first()
+        
+        if not record:
+            return jsonify({"error": "No analysis found for the specified criteria"}), 404
+        
+        # Get exception records
+        exception_records = ExceptionRecord.query.filter_by(matching_data_id=record.id).all()
+        
+        # Format exceptions
+        exceptions = []
+        for exc in exception_records:
+            exception_data = {
+                "field": exc.name,
+                "old": exc.old_value,
+                "new": exc.new_value
+            }
+            
+            # Add primary key values if available
+            pk_columns = record.primary_key_used.split(',') if record.primary_key_used else []
+            # Note: Individual PK values for each exception would need to be stored separately
+            # For now, we'll just indicate that this record belongs to this analysis
+            
+            exceptions.append(exception_data)
+        
+        # Prepare response
+        response_data = {
+            "system_name": record.system_name,
+            "date": record.date.strftime('%Y-%m-%d'),
+            "match_rate": record.match_rate,
+            "primary_key_used": record.primary_key_used,
+            "exceptions": exceptions,
+            "analysis_id": record.id
+        }
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to retrieve analysis data: {str(e)}"}), 500
+
 if __name__ == '__main__':
     app.run(debug=True)

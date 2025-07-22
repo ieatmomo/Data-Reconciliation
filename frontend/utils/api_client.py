@@ -67,3 +67,23 @@ def get_historical_data(system_name, primary_key_used=None):
     except Exception as e:
         st.error(f"Error loading historical data: {e}")
         return None
+
+def get_specific_analysis(system_name, primary_key_used=None, date=None):
+    """Get specific analysis data including detailed exceptions."""
+    try:
+        params = {"system": system_name}
+        if primary_key_used:
+            params["primary_key_used"] = primary_key_used
+        if date:
+            params["date"] = date
+        
+        response = requests.get("http://localhost:5000/analysis", params=params)
+        
+        if response.ok:
+            return response.json()
+        else:
+            st.error(f"Failed to load analysis data: {response.status_code}")
+            return None
+    except Exception as e:
+        st.error(f"Error loading analysis data: {e}")
+        return None
