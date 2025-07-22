@@ -7,7 +7,7 @@ fields:
       - strip_whitespace
       - lowercase
     fuzzy_match: 90
-  price:
+  price: #Create button/textbox to change tolerance for prices
     type: decimal
     tolerance: 0.01
   date:

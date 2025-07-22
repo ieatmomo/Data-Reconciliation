@@ -121,8 +121,6 @@ def upload_files():
 @app.route('/db_check')
 def db_check():
     try:
-        # Try a simple query
-        from models import MatchingData
         count = MatchingData.query.count()
         return jsonify({"status": "success", "row_count": count}), 200
     except Exception as e:
@@ -213,8 +211,8 @@ def get_historic_data_route():
             "dates": dates,
             "exception_counts": exception_counts,
             "match_rates": match_rates,
-            "primary_keys_used": primary_keys_used,  # Add this line
-            "system_name": actual_system_name  # Use the ACTUAL system name from DB
+            "primary_keys_used": primary_keys_used, 
+            "system_name": actual_system_name  
         }), 200
         
     except Exception as e:

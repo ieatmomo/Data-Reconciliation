@@ -11,6 +11,14 @@ map_path = st.sidebar.text_input("Mapping YAML Path", "mapping.yaml")
 old_upload = st.sidebar.file_uploader("Upload Old File", type=["csv", "xls", "xlsx", "xml"])
 new_upload = st.sidebar.file_uploader("Upload New File", type=["csv", "xls", "xlsx", "xml"])
 
+if st.sidebar.button("🔄 Refresh Dashboard", help="Clear all results and refresh the dashboard"):
+    # Clear all session state except file uploads
+    keys_to_clear = ['auto_pk', 'result', 'primary_key', 'current_files']
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.rerun()
+
 def validate_same_system(file1_name, file2_name):
     """
     Check if both files belong to the same system by comparing the first part of filename.
@@ -84,12 +92,48 @@ def run_comparison():
     else:
         st.error(response.text)
 
+def clean_system_name(system_name):
+    """
+    Clean system name by extracting the base name (0th index after splitting).
+    Used consistently throughout the app for display purposes.
+    """
+    if not system_name:
+        return system_name
+    
+    # Split by common delimiters and take the first part
+    delimiters = ['_', '-', ' ']
+    clean_name = system_name.lower().strip()
+    
+    for delimiter in delimiters:
+        if delimiter in clean_name:
+            clean_name = clean_name.split(delimiter)[0]
+            break
+    
+    return clean_name
+
 def load_available_systems():
-    """Load available systems from the database."""
+    """Load available systems from the database and return cleaned names."""
     try:
         response = requests.get("http://localhost:5000/systems")
         if response.ok:
-            return response.json().get("systems", [])
+            raw_systems = response.json().get("systems", [])
+            
+            # Create mapping of cleaned names to original names
+            system_mapping = {}
+            cleaned_systems = set()
+            
+            for system in raw_systems:
+                clean_name = clean_system_name(system)
+                if clean_name:
+                    cleaned_systems.add(clean_name)
+                    # Store first original name for each clean name
+                    if clean_name not in system_mapping:
+                        system_mapping[clean_name] = system
+            
+            # Store mapping in session state for API calls
+            st.session_state['system_mapping'] = system_mapping
+            
+            return sorted(list(cleaned_systems))
         else:
             st.error("Failed to load available systems")
             return []
@@ -97,13 +141,17 @@ def load_available_systems():
         st.error(f"Error loading systems: {e}")
         return []
 
-def display_historical_charts(selected_system, selected_pk=None):
-    """Display historical charts for the selected system."""
-    if not selected_system:
+def display_historical_charts(selected_system_clean, selected_pk=None):
+    """Display historical charts for the selected system using cleaned names for display."""
+    if not selected_system_clean:
         return
     
-    # Get historical data
-    params = {"system": selected_system}
+    # Get original system name for API calls
+    system_mapping = st.session_state.get('system_mapping', {})
+    selected_system_original = system_mapping.get(selected_system_clean, selected_system_clean)
+    
+    # Get historical data using original system name
+    params = {"system": selected_system_original}
     if selected_pk:
         params["primary_key_used"] = selected_pk
     
@@ -112,7 +160,7 @@ def display_historical_charts(selected_system, selected_pk=None):
     if response.ok:
         graph_data = response.json()
         if graph_data.get('dates'):
-            # Create two separate charts
+            # Create two separate charts using CLEANED name for titles
             col1, col2 = st.columns(2)
             
             with col1:
@@ -126,7 +174,7 @@ def display_historical_charts(selected_system, selected_pk=None):
                 ))
                 
                 fig_exceptions.update_layout(
-                    title=f'Exception Count Trend - {selected_system.title()}',
+                    title=f'Exception Count Trend - {selected_system_clean.title()}',  # CLEANED NAME
                     xaxis=dict(title='Date', type='category'),
                     yaxis=dict(
                         title='Number of Exceptions',
@@ -149,26 +197,26 @@ def display_historical_charts(selected_system, selected_pk=None):
                 ))
                 
                 fig_match_rate.update_layout(
-                    title=f'Match Rate Trend - {selected_system.title()}',
+                    title=f'Match Rate Trend - {selected_system_clean.title()}',  # CLEANED NAME
                     xaxis=dict(title='Date', type='category'),
                     yaxis=dict(title='Match Rate (%)', range=[0, 100]),
                     height=400
                 )
                 st.plotly_chart(fig_match_rate, use_container_width=True)
                 
-            # Show summary stats
+            # Show summary stats using CLEANED name
             avg_match_rate = sum(graph_data['match_rates'])/len(graph_data['match_rates']) if graph_data['match_rates'] else 0
             total_exceptions = sum(graph_data['exception_counts']) if graph_data['exception_counts'] else 0
             
             st.markdown(f"""
-            **📊 Summary for {selected_system.title()}:**
+            **📊 Summary for {selected_system_clean.title()}:**
             - **Total Runs**: {len(graph_data['dates'])}
             - **Average Match Rate**: {avg_match_rate:.1f}%
             - **Total Exceptions**: {total_exceptions}
             - **Date Range**: {graph_data['dates'][0]} to {graph_data['dates'][-1]}
             """)
         else:
-            st.info(f"No historical data available for system: {selected_system}")
+            st.info(f"No historical data available for system: {selected_system_clean}")
     else:
         st.error(f"Failed to load historical data: {response.status_code}")
 
@@ -291,26 +339,30 @@ if old_upload and new_upload:
 st.header("📈 Historical Data Browser")
 st.markdown("Browse historical reconciliation data for any system in the database.")
 
-# Load available systems
+# Load available systems (returns cleaned names)
 available_systems = load_available_systems()
 
 if available_systems:
-    # System selection
+    # System selection using cleaned names
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        selected_system = st.selectbox(
+        selected_system_clean = st.selectbox(
             "Select System:",
-            options=[""] + available_systems,
+            options=[""] + available_systems,  # These are already cleaned
             index=0,
             help="Choose a system to view its historical reconciliation data"
         )
     
     with col2:
-        if selected_system:
-            # Get system details to show available primary keys
+        if selected_system_clean:
+            # Get original system name for API calls
+            system_mapping = st.session_state.get('system_mapping', {})
+            selected_system_original = system_mapping.get(selected_system_clean, selected_system_clean)
+            
+            # Get system details using original name
             try:
-                response = requests.get(f"http://localhost:5000/system_details/{selected_system}")
+                response = requests.get(f"http://localhost:5000/system_details/{selected_system_original}")
                 if response.ok:
                     system_details = response.json()
                     available_pks = system_details.get("primary_keys", [])
@@ -334,16 +386,20 @@ if available_systems:
                 st.error(f"Error: {e}")
 
     # Display historical data for selected system
-    if selected_system:
-        # Display charts
-        display_historical_charts(selected_system, selected_pk)
+    if selected_system_clean:
+        # Display charts using cleaned name
+        display_historical_charts(selected_system_clean, selected_pk)
         
-        # Show historical exception records in a table
-        st.subheader(f"📋 Exception Records for {selected_system.title()}")
+        # Show historical exception records using CLEANED name for subtitle
+        st.subheader(f"📋 Exception Records for {selected_system_clean.title()}")
         
         try:
-            # Get historical data to extract exception records
-            params = {"system": selected_system}
+            # Get original system name for API call
+            system_mapping = st.session_state.get('system_mapping', {})
+            selected_system_original = system_mapping.get(selected_system_clean, selected_system_clean)
+            
+            # Get historical data using original name
+            params = {"system": selected_system_original}
             if selected_pk:
                 params["primary_key_used"] = selected_pk
             
@@ -356,8 +412,14 @@ if available_systems:
                     # Create a summary table of all runs
                     summary_data = []
                     for i, date in enumerate(graph_data['dates']):
+                        # Get primary key for this specific run
+                        pk_used = graph_data.get('primary_keys_used', [None] * len(graph_data['dates']))[i]
+                        if not pk_used:
+                            pk_used = selected_pk if selected_pk else "Auto-detected"
+                        
                         summary_data.append({
                             'Date': date,
+                            'Primary Key': pk_used,
                             'Match Rate (%)': graph_data['match_rates'][i],
                             'Exception Count': graph_data['exception_counts'][i],
                             'Status': '✅ Good' if graph_data['match_rates'][i] >= 95 else '⚠️ Check Required' if graph_data['match_rates'][i] >= 90 else '❌ Issues'
@@ -372,22 +434,23 @@ if available_systems:
                         use_container_width=True,
                         column_config={
                             "Date": st.column_config.DateColumn("Date"),
+                            "Primary Key": st.column_config.TextColumn("Primary Key"),
                             "Match Rate (%)": st.column_config.NumberColumn("Match Rate (%)", format="%.1f"),
                             "Exception Count": st.column_config.NumberColumn("Exception Count"),
                             "Status": st.column_config.TextColumn("Status")
                         }
                     )
                     
-                    # Download option
+                    # Download option using CLEANED name for filename
                     csv_data = summary_df.to_csv(index=False)
                     st.download_button(
                         label="📥 Download Historical Data as CSV",
                         data=csv_data,
-                        file_name=f"historical_data_{selected_system}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        file_name=f"historical_data_{selected_system_clean}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv"
                     )
                 else:
-                    st.info(f"No historical data found for system: {selected_system}")
+                    st.info(f"No historical data found for system: {selected_system_clean}")
             else:
                 st.error("Failed to load historical data")
                 
