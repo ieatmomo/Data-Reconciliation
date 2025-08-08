@@ -8,6 +8,7 @@ from models import MatchingData
 import tempfile
 import pandas as pd
 from db import db
+from analysis.exception_builder import add_summary_to_exceptions
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = SQLALCHEMY_DATABASE_URI
@@ -68,6 +69,10 @@ def upload_files():
             # Run comparison
             result = compare.run_compare(df_old, df_new, pk_cols, mapping_cfg)
 
+            # Add summary to exceptions AFTER comparison
+            if result and result.get('exceptions'):
+                result['exceptions'] = add_summary_to_exceptions(result['exceptions'], mapping_cfg)
+            
             # Generate system name from filename (remove extension and normalize)
             system_name = fileOld.filename.rsplit('.', 1)[0].lower().strip()
             

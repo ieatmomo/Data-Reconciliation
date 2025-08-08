@@ -103,12 +103,18 @@ def _render_comparison_results():
         st.subheader("Exceptions")
         exceptions_df = pd.DataFrame(result['exceptions'])
         
+        # ADD SUMMARY COLUMN ON-THE-FLY
+        exceptions_df['summary'] = exceptions_df.apply(
+            lambda row: _build_summary_local(row['old'], row['new']), 
+            axis=1
+        )
+        
         # Get primary key columns and create dynamic column order
         pk_columns = result.get("primary_key", [])
         
-        # Start with primary key columns, then add field, old, new
+        # Start with primary key columns, then add field, old, new, summary
         column_order = pk_columns.copy()
-        for col in ['field', 'old', 'new']:
+        for col in ['field', 'old', 'new', 'summary']:  # ADD summary here
             if col in exceptions_df.columns and col not in column_order:
                 column_order.append(col)
         
@@ -120,5 +126,62 @@ def _render_comparison_results():
         # Filter to only include columns that actually exist
         columns_to_show = [col for col in column_order if col in exceptions_df.columns]
         
-        st.dataframe(exceptions_df[columns_to_show], height=400, use_container_width=True)
+        st.dataframe(
+            exceptions_df[columns_to_show], 
+            height=400, 
+            use_container_width=True,
+            column_config={
+                "field": st.column_config.TextColumn("Field Name"),
+                "old": st.column_config.TextColumn("Old Value"),
+                "new": st.column_config.TextColumn("New Value"),
+                "summary": st.column_config.TextColumn("Summary")  # ADD THIS
+            }
+        )
         st.caption(f"Primary Key(s): {', '.join(pk_columns)}")
+
+def _build_summary_local(old_value, new_value):
+    """Build summary locally in frontend - simple version."""
+    try:
+        # Handle null values
+        if pd.isna(old_value) and pd.isna(new_value):
+            return "no change"
+        elif pd.isna(old_value):
+            return f"added: {new_value}"
+        elif pd.isna(new_value):
+            return f"removed: {old_value}"
+        
+        # Try numeric comparison first
+        try:
+            old_v, new_v = float(old_value), float(new_value)
+            delta = new_v - old_v
+            if old_v != 0:
+                pct = (delta / old_v * 100)
+                return f"changed by {delta:+.2f} ({pct:+.2f}%)"
+            else:
+                return f"changed by {delta:+.2f}"
+        except (ValueError, TypeError):
+            pass
+        
+        # Try date comparison
+        try:
+            from dateutil import parser
+            d_old = parser.parse(str(old_value))
+            d_new = parser.parse(str(new_value))
+            days = (d_new - d_old).days
+            if days == 0:
+                return "same date, time changed"
+            else:
+                return f"shifted by {days:+d} days"
+        except:
+            pass
+        
+        # Default to text comparison
+        old_str, new_str = str(old_value), str(new_value)
+        if len(old_str) > 30:
+            old_str = old_str[:30] + "..."
+        if len(new_str) > 30:
+            new_str = new_str[:30] + "..."
+        return f"from '{old_str}' to '{new_str}'"
+        
+    except Exception:
+        return f"from {old_value} to {new_value}"

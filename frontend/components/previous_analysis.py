@@ -213,14 +213,20 @@ def _render_exceptions_table(exceptions, pk_columns, selected_system_clean, sele
         st.info("No exceptions to display.")
         return
     
+    # ADD SUMMARY COLUMN ON-THE-FLY (same as above)
+    exceptions_df['summary'] = exceptions_df.apply(
+        lambda row: _build_summary_local(row['old'], row['new']), 
+        axis=1
+    )
+    
     # Clean up primary key columns (remove any empty strings)
     pk_columns = [pk.strip() for pk in pk_columns if pk.strip()]
     
-    # Create dynamic column order: PKs first, then field, old, new
+    # Create dynamic column order: PKs first, then field, old, new, summary
     column_order = pk_columns.copy() if pk_columns else []
     
-    # Add standard exception columns
-    for col in ['field', 'old', 'new']:
+    # Add standard exception columns INCLUDING summary
+    for col in ['field', 'old', 'new', 'summary']:  # ADD summary here
         if col in exceptions_df.columns and col not in column_order:
             column_order.append(col)
     
@@ -240,7 +246,8 @@ def _render_exceptions_table(exceptions, pk_columns, selected_system_clean, sele
         column_config={
             "field": st.column_config.TextColumn("Field Name"),
             "old": st.column_config.TextColumn("Old Value"),
-            "new": st.column_config.TextColumn("New Value")
+            "new": st.column_config.TextColumn("New Value"),
+            "summary": st.column_config.TextColumn("Summary")  # ADD THIS
         }
     )
     
@@ -255,6 +262,53 @@ def _render_exceptions_table(exceptions, pk_columns, selected_system_clean, sele
         file_name=f"exceptions_{selected_system_clean}_{selected_date}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv"
     )
+
+def _build_summary_local(old_value, new_value):
+    """Build summary locally in frontend - same function as file_upload.py"""
+    try:
+        # Handle null values
+        if pd.isna(old_value) and pd.isna(new_value):
+            return "no change"
+        elif pd.isna(old_value):
+            return f"added: {new_value}"
+        elif pd.isna(new_value):
+            return f"removed: {old_value}"
+        
+        # Try numeric comparison first
+        try:
+            old_v, new_v = float(old_value), float(new_value)
+            delta = new_v - old_v
+            if old_v != 0:
+                pct = (delta / old_v * 100)
+                return f"changed by {delta:+.2f} ({pct:+.2f}%)"
+            else:
+                return f"changed by {delta:+.2f}"
+        except (ValueError, TypeError):
+            pass
+        
+        # Try date comparison
+        try:
+            from dateutil import parser
+            d_old = parser.parse(str(old_value))
+            d_new = parser.parse(str(new_value))
+            days = (d_new - d_old).days
+            if days == 0:
+                return "same date, time changed"
+            else:
+                return f"shifted by {days:+d} days"
+        except:
+            pass
+        
+        # Default to text comparison
+        old_str, new_str = str(old_value), str(new_value)
+        if len(old_str) > 30:
+            old_str = old_str[:30] + "..."
+        if len(new_str) > 30:
+            new_str = new_str[:30] + "..."
+        return f"from '{old_str}' to '{new_str}'"
+        
+    except Exception:
+        return f"from {old_value} to {new_value}"
 
 def _show_no_data_message():
     """Show message when no data is available."""
