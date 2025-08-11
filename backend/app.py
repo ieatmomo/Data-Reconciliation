@@ -94,7 +94,8 @@ def upload_files():
 
             # Save to database
             try:
-                save_to_db(result_for_db)
+                saved_data = save_to_db(result_for_db)
+                analysis_id = saved_data.get('id')
             except Exception as e:
                 return jsonify({"error": f"Database save failed: {str(e)}"}), 500
 
@@ -105,7 +106,8 @@ def upload_files():
                 "primary_key": pk_cols,
                 "system_name": system_name,
                 "date": result_for_db["date"].isoformat(),
-                "available_columns": common_cols  # Send available columns to frontend
+                "available_columns": common_cols,  # Send available columns to frontend
+                "analysis_id": analysis_id  # Include analysis ID for exception management
             }
 
             return jsonify(convert_json_safe(response_data)), 200
@@ -295,6 +297,183 @@ def get_specific_analysis():
         
     except Exception as e:
         return jsonify({"error": f"Failed to retrieve analysis data: {str(e)}"}), 500
+
+
+@app.route('/api/reject_exceptions', methods=['POST'])
+def reject_exceptions():
+    """Mark exceptions as rejected (not real exceptions) using existing ExceptionRecord model."""
+    try:
+        data = request.get_json()
+        system_name = data.get('system_name')
+        matching_data_id = data.get('matching_data_id')
+        rejected_exception_ids = data.get('rejected_ids', [])
+        
+        if not system_name or not matching_data_id:
+            return jsonify({"error": "system_name and matching_data_id are required"}), 400
+        
+        # Save rejected exceptions as new records with special markers
+        from models import ExceptionRecord
+        rejection_count = 0
+        
+        for exc_id in rejected_exception_ids:
+            # Create rejection record using existing model structure
+            rejection_record = ExceptionRecord(
+                matching_data_id=matching_data_id,
+                name="REJECTED_EXCEPTION",  # Special marker field
+                old_value=str(exc_id),      # Store original exception ID
+                new_value="REJECTED"        # Rejection marker
+            )
+            
+            try:
+                db.session.add(rejection_record)
+                rejection_count += 1
+            except Exception as e:
+                print(f"Failed to add rejection record for exception {exc_id}: {e}")
+                continue
+        
+        db.session.commit()
+        
+        return jsonify({
+            "status": "success", 
+            "rejected_count": rejection_count,
+            "message": f"Successfully rejected {rejection_count} exceptions"
+        }), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Failed to reject exceptions: {str(e)}"}), 500
+
+
+@app.route('/api/get_rejected_exceptions/<system_name>/<int:matching_data_id>')
+def get_rejected_exceptions(system_name, matching_data_id):
+    """Get list of rejected exception IDs for a specific analysis."""
+    try:
+        from models import ExceptionRecord
+        
+        rejected_records = ExceptionRecord.query.filter_by(
+            matching_data_id=matching_data_id,
+            name="REJECTED_EXCEPTION"
+        ).all()
+        
+        rejected_ids = []
+        for record in rejected_records:
+            try:
+                rejected_ids.append(int(record.old_value))
+            except (ValueError, TypeError):
+                continue  # Skip invalid rejection records
+        
+        return jsonify({
+            "rejected_ids": rejected_ids,
+            "count": len(rejected_ids)
+        }), 200
+    
+    except Exception as e:
+        return jsonify({"error": f"Failed to get rejected exceptions: {str(e)}"}), 500
+
+
+@app.route('/api/recalculate_match_rate/<int:matching_data_id>', methods=['POST'])
+def recalculate_match_rate(matching_data_id):
+    """Recalculate match rate excluding rejected exceptions."""
+    try:
+        from models import MatchingData, ExceptionRecord
+        
+        # Get the analysis record
+        analysis = MatchingData.query.get_or_404(matching_data_id)
+        
+        # Get all original exceptions (excluding rejection markers)
+        original_exceptions = ExceptionRecord.query.filter_by(
+            matching_data_id=matching_data_id
+        ).filter(ExceptionRecord.name != "REJECTED_EXCEPTION").all()
+        
+        # Get rejected exception IDs
+        rejected_records = ExceptionRecord.query.filter_by(
+            matching_data_id=matching_data_id,
+            name="REJECTED_EXCEPTION"
+        ).all()
+        
+        rejected_ids = set()
+        for record in rejected_records:
+            try:
+                rejected_ids.add(int(record.old_value))
+            except (ValueError, TypeError):
+                continue
+        
+        # Calculate remaining exceptions (original - rejected)
+        remaining_count = 0
+        for i, exc in enumerate(original_exceptions):
+            if i not in rejected_ids:  # Using index as exception ID
+                remaining_count += 1
+        
+        # Calculate new match rate
+        total_original = len(original_exceptions)
+        
+        if total_original > 0:
+            # Calculate new match rate: (total - remaining_exceptions) / total * 100
+            new_match_rate = ((total_original - remaining_count) / total_original) * 100
+        else:
+            new_match_rate = 100.0
+        
+        return jsonify({
+            "original_exceptions": total_original,
+            "rejected_exceptions": len(rejected_ids),
+            "remaining_exceptions": remaining_count,
+            "new_match_rate": round(new_match_rate, 2),
+            "old_match_rate": analysis.match_rate
+        }), 200
+    
+    except Exception as e:
+        return jsonify({"error": f"Failed to recalculate match rate: {str(e)}"}), 500
+
+
+@app.route('/api/get_filtered_exceptions/<int:matching_data_id>')
+def get_filtered_exceptions(matching_data_id):
+    """Get exceptions with rejected ones filtered out and proper indexing."""
+    try:
+        from models import MatchingData, ExceptionRecord
+        
+        # Get all original exceptions (excluding rejection markers)
+        original_exceptions = ExceptionRecord.query.filter_by(
+            matching_data_id=matching_data_id
+        ).filter(ExceptionRecord.name != "REJECTED_EXCEPTION").all()
+        
+        # Get rejected exception IDs
+        rejected_records = ExceptionRecord.query.filter_by(
+            matching_data_id=matching_data_id,
+            name="REJECTED_EXCEPTION"
+        ).all()
+        
+        rejected_ids = set()
+        for record in rejected_records:
+            try:
+                rejected_ids.add(int(record.old_value))
+            except (ValueError, TypeError):
+                continue
+        
+        # Build filtered exceptions with NEW indices
+        filtered_exceptions = []
+        new_index = 0
+        
+        for i, exc in enumerate(original_exceptions):
+            if i not in rejected_ids:  # Keep this exception
+                filtered_exceptions.append({
+                    "index": new_index,  # NEW sequential index
+                    "original_index": i,  # Original index for reference
+                    "field": exc.name,
+                    "old": exc.old_value,
+                    "new": exc.new_value
+                })
+                new_index += 1
+        
+        return jsonify({
+            "filtered_exceptions": filtered_exceptions,
+            "total_filtered": len(filtered_exceptions),
+            "total_original": len(original_exceptions),
+            "total_rejected": len(rejected_ids)
+        }), 200
+    
+    except Exception as e:
+        return jsonify({"error": f"Failed to get filtered exceptions: {str(e)}"}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True)

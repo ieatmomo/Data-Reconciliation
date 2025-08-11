@@ -87,3 +87,63 @@ def get_specific_analysis(system_name, primary_key_used=None, date=None):
     except Exception as e:
         st.error(f"Error loading analysis data: {e}")
         return None
+
+
+def reject_exceptions(system_name, matching_data_id, rejected_ids):
+    """Send rejected exception IDs to backend."""
+    try:
+        response = requests.post(f"http://localhost:5000/api/reject_exceptions", json={
+            "system_name": system_name,
+            "matching_data_id": matching_data_id,
+            "rejected_ids": rejected_ids
+        })
+        
+        if response.ok:
+            return response.json()
+        else:
+            return {"error": f"Server error: {response.status_code}"}
+    except Exception as e:
+        print(f"Error rejecting exceptions: {e}")
+        return {"error": str(e)}
+
+
+def get_rejected_exceptions(system_name, matching_data_id):
+    """Get list of rejected exception IDs."""
+    try:
+        response = requests.get(f"http://localhost:5000/api/get_rejected_exceptions/{system_name}/{matching_data_id}")
+        
+        if response.ok:
+            return response.json()
+        else:
+            return {"rejected_ids": [], "error": f"Server error: {response.status_code}"}
+    except Exception as e:
+        print(f"Error getting rejected exceptions: {e}")
+        return {"rejected_ids": [], "error": str(e)}
+
+
+def recalculate_match_rate(matching_data_id):
+    """Recalculate match rate excluding rejected exceptions."""
+    try:
+        response = requests.post(f"http://localhost:5000/api/recalculate_match_rate/{matching_data_id}")
+        
+        if response.ok:
+            return response.json()
+        else:
+            return {"error": f"Server error: {response.status_code}"}
+    except Exception as e:
+        print(f"Error recalculating match rate: {e}")
+        return {"error": str(e)}
+
+
+def get_filtered_exceptions(matching_data_id):
+    """Get exceptions with rejected ones filtered out and proper indexing."""
+    try:
+        response = requests.get(f"http://localhost:5000/api/get_filtered_exceptions/{matching_data_id}")
+        
+        if response.ok:
+            return response.json()
+        else:
+            return {"error": f"Server error: {response.status_code}"}
+    except Exception as e:
+        print(f"Error getting filtered exceptions: {e}")
+        return {"error": str(e)}

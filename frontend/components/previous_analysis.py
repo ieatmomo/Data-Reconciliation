@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from utils.api_client import get_available_systems, get_system_details, get_historical_data, get_specific_analysis
+from utils.api_client import get_available_systems, get_system_details, get_historical_data, get_specific_analysis, reject_exceptions, get_rejected_exceptions, recalculate_match_rate
 from utils.data_processing import clean_system_name
 
 def render_previous_analysis():
@@ -205,7 +205,7 @@ def _display_analysis_results(selected_system_clean, selected_pk, selected_date)
         st.error(f"Error loading analysis results: {e}")
 
 def _render_exceptions_table(exceptions, pk_columns, selected_system_clean, selected_date):
-    """Render the exceptions data table with proper column ordering."""
+    """Render the exceptions data table with exception management."""
     
     exceptions_df = pd.DataFrame(exceptions)
     
@@ -213,55 +213,153 @@ def _render_exceptions_table(exceptions, pk_columns, selected_system_clean, sele
         st.info("No exceptions to display.")
         return
     
-    # ADD SUMMARY COLUMN ON-THE-FLY (same as above)
-    exceptions_df['summary'] = exceptions_df.apply(
-        lambda row: _build_summary_local(row['old'], row['new']), 
-        axis=1
-    )
+    # Get system mapping for API calls
+    system_mapping = st.session_state.get('prev_analysis_system_mapping', {})
+    selected_system_original = system_mapping.get(selected_system_clean, selected_system_clean)
     
-    # Clean up primary key columns (remove any empty strings)
-    pk_columns = [pk.strip() for pk in pk_columns if pk.strip()]
+    # Get analysis data to extract analysis_id
+    analysis_data = get_specific_analysis(selected_system_original, None, selected_date)
+    analysis_id = analysis_data.get('analysis_id') if analysis_data else None
     
-    # Create dynamic column order: PKs first, then field, old, new, summary
-    column_order = pk_columns.copy() if pk_columns else []
+    # Get rejected exceptions if analysis_id is available
+    rejected_ids = []
+    if analysis_id:
+        rejected_response = get_rejected_exceptions(selected_system_original, analysis_id)
+        rejected_ids = rejected_response.get("rejected_ids", [])
     
-    # Add standard exception columns INCLUDING summary
-    for col in ['field', 'old', 'new', 'summary']:  # ADD summary here
-        if col in exceptions_df.columns and col not in column_order:
-            column_order.append(col)
+    # Filter out rejected exceptions AND RESET INDEX
+    if rejected_ids:
+        # Filter out rejected exceptions
+        exceptions_df = exceptions_df[~exceptions_df.index.isin(rejected_ids)]
+        # CRITICAL FIX: Reset index to create sequential [0,1,2,3...] indices
+        exceptions_df = exceptions_df.reset_index(drop=True)
     
-    # Add any remaining columns
-    for col in exceptions_df.columns:
-        if col not in column_order:
-            column_order.append(col)
-    
-    # Filter to only include columns that actually exist
-    columns_to_show = [col for col in column_order if col in exceptions_df.columns]
-    
-    # Display the dataframe
-    st.dataframe(
-        exceptions_df[columns_to_show], 
-        height=400, 
-        use_container_width=True,
-        column_config={
-            "field": st.column_config.TextColumn("Field Name"),
-            "old": st.column_config.TextColumn("Old Value"),
-            "new": st.column_config.TextColumn("New Value"),
-            "summary": st.column_config.TextColumn("Summary")  # ADD THIS
-        }
-    )
-    
-    # Show summary info
-    st.caption(f"🔑 Primary Key(s): {', '.join(pk_columns) if pk_columns else 'Unknown'}")
-    
-    # Add download button for exceptions
-    csv_data = exceptions_df[columns_to_show].to_csv(index=False)
-    st.download_button(
-        label="📥 Download Exceptions as CSV",
-        data=csv_data,
-        file_name=f"exceptions_{selected_system_clean}_{selected_date}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv"
-    )
+    if len(exceptions_df) > 0:
+        # ADD SUMMARY COLUMN ON-THE-FLY (same as above)
+        exceptions_df['summary'] = exceptions_df.apply(
+            lambda row: _build_summary_local(row['old'], row['new']), 
+            axis=1
+        )
+        
+        # Add rejection checkbox column
+        exceptions_df['Reject Exception'] = False
+        
+        # Clean up primary key columns (remove any empty strings)
+        pk_columns = [pk.strip() for pk in pk_columns if pk.strip()]
+        
+        # Create dynamic column order: PKs first, then field, old, new, summary, reject
+        column_order = pk_columns.copy() if pk_columns else []
+        
+        # Add standard exception columns INCLUDING summary and rejection
+        for col in ['field', 'old', 'new', 'summary']:
+            if col in exceptions_df.columns and col not in column_order:
+                column_order.append(col)
+        
+        # Add rejection column
+        column_order.append('Reject Exception')
+        
+        # Add any remaining columns
+        for col in exceptions_df.columns:
+            if col not in column_order:
+                column_order.append(col)
+        
+        # Filter to only include columns that actually exist
+        columns_to_show = [col for col in column_order if col in exceptions_df.columns]
+        
+        # Display editable dataframe
+        edited_df = st.data_editor(
+            exceptions_df[columns_to_show],
+            column_config={
+                "field": st.column_config.TextColumn("Field Name"),
+                "old": st.column_config.TextColumn("Old Value"),
+                "new": st.column_config.TextColumn("New Value"),
+                "summary": st.column_config.TextColumn("Summary"),
+                "Reject Exception": st.column_config.CheckboxColumn(
+                    "Reject Exception",
+                    help="Mark this exception as acceptable (will be removed)",
+                    default=False,
+                ),
+            },
+            disabled=["field", "old", "new", "summary"] + pk_columns,
+            use_container_width=True,
+            height=400,
+            key=f"prev_exceptions_editor_{selected_system_clean}_{selected_date}"
+        )
+        
+        # Add refresh button with enhanced styling
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            apply_button = st.button(
+                "🔄 Apply Rejections", 
+                key=f"prev_apply_rejections_{selected_system_clean}_{selected_date}",
+                help="Remove selected exceptions and update analysis",
+                type="primary"
+            )
+            
+        if apply_button:
+            # Get rejected exception IDs
+            rejected_mask = edited_df['Reject Exception'] == True
+            rejected_exception_ids = edited_df[rejected_mask].index.tolist()
+            
+            if rejected_exception_ids and analysis_id:
+                with st.spinner("Processing exception rejections..."):
+                    # Send rejections to backend
+                    result_api = reject_exceptions(selected_system_original, analysis_id, rejected_exception_ids)
+                    
+                    if "error" not in result_api:
+                        st.success(f"✅ Successfully rejected {len(rejected_exception_ids)} exceptions!")
+                        
+                        # Recalculate match rate and show improvement
+                        match_result = recalculate_match_rate(analysis_id)
+                        if "error" not in match_result:
+                            new_rate = match_result.get('new_match_rate')
+                            old_rate = match_result.get('old_match_rate')
+                            
+                            if new_rate and old_rate:
+                                improvement = new_rate - old_rate
+                                if improvement > 0:
+                                    st.balloons()  # Celebrate improvement!
+                                    st.success(f"🎉 Match rate improved by {improvement:.1f}%! ({old_rate:.1f}% → {new_rate:.1f}%)")
+                                else:
+                                    st.info(f"📊 Match rate: {new_rate:.1f}%")
+                        
+                        st.rerun()  # Refresh the page
+                    else:
+                        st.error(f"❌ Error: {result_api['error']}")
+            elif not analysis_id:
+                st.warning("⚠️ Cannot reject exceptions: Analysis ID not available")
+            else:
+                st.info("ℹ️ No exceptions selected for rejection")
+        
+        # Show current stats with proper calculation
+        original_total = len(exceptions) if exceptions else 0
+        current_remaining = len(exceptions_df)  # After filtering and reset
+        total_rejected = len(rejected_ids)
+        
+        if rejected_ids:
+            st.info(f"""
+            **Exception Management Summary:**
+            - Original exceptions: {original_total}
+            - Rejected exceptions: {total_rejected}
+            - Remaining exceptions: {current_remaining}
+            """)
+        
+        # Show summary info
+        st.caption(f"🔑 Primary Key(s): {', '.join(pk_columns) if pk_columns else 'Unknown'}")
+        
+        # Add download button for exceptions
+        csv_data = exceptions_df[columns_to_show].to_csv(index=False)
+        st.download_button(
+            label="📥 Download Exceptions as CSV",
+            data=csv_data,
+            file_name=f"exceptions_{selected_system_clean}_{selected_date}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.success("🎉 All exceptions have been rejected! Perfect match achieved.")
+        if rejected_ids:
+            st.info(f"💡 {len(rejected_ids)} exceptions were marked as acceptable differences.")
 
 def _build_summary_local(old_value, new_value):
     """Build summary locally in frontend - same function as file_upload.py"""

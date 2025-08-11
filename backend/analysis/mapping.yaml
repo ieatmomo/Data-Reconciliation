@@ -1,3 +1,24 @@
+# Data Reconciliation Configuration
+# This file defines how to compare datasets and handle null values
+
+# ============================================================================
+# GLOBAL COMPARISON SETTINGS
+# ============================================================================
+
+# How to handle null values in comparisons:
+# - ignore_nulls: false = null vs value differences are treated as exceptions
+# - ignore_nulls: true  = null vs value differences are ignored
+ignore_nulls: false
+
+# Whether to include missing records as exceptions:
+# - include_missing_records: false = only compare field differences for matching records
+# - include_missing_records: true  = include record additions/deletions as exceptions  
+include_missing_records: false
+
+# ============================================================================
+# PRIMARY KEY AND FIELD DEFINITIONS
+# ============================================================================
+
 # pair_name: sample
 pk: [id]
 fields:
@@ -42,3 +63,19 @@ fields:
     clean:
       - strip_whitespace
       - lowercase
+
+# ============================================================================
+# CONFIGURATION EXAMPLES FOR DIFFERENT USE CASES
+# ============================================================================
+
+# STRICT MODE (for critical data quality checks):
+# ignore_nulls: false
+# include_missing_records: true
+
+# LENIENT MODE (focus on value changes, ignore null differences):
+# ignore_nulls: true
+# include_missing_records: false
+
+# BALANCED MODE (ignore null differences but track record changes):
+# ignore_nulls: true
+# include_missing_records: true
